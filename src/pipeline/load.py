@@ -84,9 +84,13 @@ def load_dataframe_idempotent(
 def create_analytics_views(engine: Engine) -> None:
     """
     Creates analytical views optimized for downstream BI tools and automated Insights Agents.
+    Supports dialect-specific view creation (PostgreSQL: CREATE OR REPLACE, SQLite: CREATE VIEW IF NOT EXISTS).
     """
-    vw_ad_performance_summary = """
-    CREATE VIEW IF NOT EXISTS vw_ad_performance_summary AS
+    dialect = engine.dialect.name
+    view_prefix = "CREATE OR REPLACE VIEW" if dialect == "postgresql" else "CREATE VIEW IF NOT EXISTS"
+
+    vw_ad_performance_summary = f"""
+    {view_prefix} vw_ad_performance_summary AS
     SELECT 
         d.full_date,
         acc.account_name,
@@ -126,8 +130,8 @@ def create_analytics_views(engine: Engine) -> None:
         f.network;
     """
 
-    vw_campaign_leaderboard = """
-    CREATE VIEW IF NOT EXISTS vw_campaign_leaderboard AS
+    vw_campaign_leaderboard = f"""
+    {view_prefix} vw_campaign_leaderboard AS
     SELECT 
         c.campaign_name,
         acc.account_name,
@@ -150,12 +154,9 @@ def create_analytics_views(engine: Engine) -> None:
 
     logger.info("Registering analytical views for Insights Agents and BI...")
     with engine.begin() as conn:
-        try:
-            conn.execute(text(vw_ad_performance_summary))
-            conn.execute(text(vw_campaign_leaderboard))
-            logger.info("Successfully registered analytical views.")
-        except Exception as e:
-            logger.warning("Could not create views (dialect may require alternate syntax): %s", e)
+        conn.execute(text(vw_ad_performance_summary))
+        conn.execute(text(vw_campaign_leaderboard))
+        logger.info("Successfully registered analytical views.")
 
 
 def load_warehouse(data: TransformedData, engine: Engine | None = None) -> dict[str, int]:
