@@ -259,6 +259,9 @@ The warehouse schema is designed around a **Star Schema** optimized for high-per
 
 ```text
 advertising_airflow_pipeline/
+├── .github/
+│   └── workflows/
+│       └── ci.yml                 # GitHub Actions automated test & CI pipeline
 ├── dags/
 │   └── bing_ads_etl_dag.py        # Airflow DAG definition & task orchestration
 ├── src/
@@ -285,15 +288,44 @@ advertising_airflow_pipeline/
 
 ---
 
-## 🧪 Automated Testing
+## 🧪 Testing Methodology & Expectations
 
-Run the test suite covering data quality assertions, ID cleaning, KPI math, referential integrity, and idempotency:
+To ensure both rapid developer velocity and production safety on PostgreSQL, the project implements a **two-tier testing strategy**:
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│  Tier 1: Fast Unit & In-Memory Component Tests (pytest)                │
+│  • Engine: In-Memory SQLite (sqlite:///:memory:)                       │
+│  • Execution Speed: ~1.8 seconds                                       │
+│  • Scope: Schema contracts, math safety, data validation, idempotency  │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │
+┌───────────────────────────────────▼────────────────────────────────────┐
+│  Tier 2: Containerized Data Warehouse Audit (verify_warehouse_and_views)│
+│  • Engine: Production PostgreSQL 15 in Docker                          │
+│  • Scope: Live Postgres DDL, zero-orphan foreign keys, view queries     │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+### Tier 1: Unit & Component Test Suite (`pytest tests/ -v`)
+
+Run the automated test suite locally or in CI:
 
 ```bash
 pytest tests/ -v
 ```
 
-Test Results:
+#### Test Expectations & Coverage:
+1. **`test_clean_id`**: Verifies that brackets and dirty characters (e.g., `[2709719083]` $\to$ `2709719083`) are stripped and cast to clean 64-bit BigInts.
+2. **`test_generate_surrogate_key`**: Verifies that surrogate key generation is deterministic, case-insensitive, and collision-resistant across composite inputs.
+3. **`test_validation_flags_negative_metrics`**: Verifies that records with negative impressions, clicks, or spend are caught and flagged.
+4. **`test_validation_detects_click_anomalies`**: Verifies that ad-tech attribution latency anomalies (`clicks > impressions`) are flagged in the validation audit without dropping financial data.
+5. **`test_kpi_calculations`**: Verifies that derived advertising KPIs (`CTR`, `CPC`, `CPA`, `conversion_rate`) compute accurately and guard against zero-division errors (`NaN`/`Inf`).
+6. **`test_referential_integrity_and_idempotency`**: Integration test using all **12,497 real rows** from `BING_MultiDays.csv`. Proves that:
+   - Every fact row foreign key resolves to a valid record in `dim_date`, `dim_account`, `dim_campaign`, `dim_ad_group`, and `dim_ad` (**zero orphaned rows**).
+   - Re-running the warehouse load does not duplicate records or cause primary key violations (**100% idempotent**).
+7. **`test_audit_pipeline_runs_logging`**: Verifies that run metrics, durations, and JSON summaries are correctly persisted and queryable in `audit_pipeline_runs`.
+
 ```text
 tests/test_pipeline.py::test_clean_id PASSED                             [ 14%]
 tests/test_pipeline.py::test_generate_surrogate_key PASSED               [ 28%]
@@ -304,6 +336,31 @@ tests/test_pipeline.py::test_referential_integrity_and_idempotency PASSED [ 85%]
 tests/test_pipeline.py::test_audit_pipeline_runs_logging PASSED          [100%]
 ============================== 7 passed in 1.79s ==============================
 ```
+
+---
+
+### Tier 2: Real Data Warehouse Audit (In Airflow on PostgreSQL 15)
+
+While SQLite catches 90% of logic errors instantly, PostgreSQL enforces strict types, foreign keys, and dialect-specific view syntax.
+
+As the final task in the Airflow DAG ([`verify_warehouse_and_views`](dags/bing_ads_etl_dag.py)), the pipeline automatically runs an **in-engine verification directly against PostgreSQL**:
+1. **Row Count Audit**: Asserts `fact_ad_performance_daily` has all 12,497 records.
+2. **Referential Integrity Check**:
+   ```sql
+   SELECT COUNT(*) FROM fact_ad_performance_daily f
+   LEFT JOIN dim_account a ON f.account_id = a.account_id
+   WHERE a.account_id IS NULL;
+   ```
+   Fails the pipeline immediately if any orphaned records are found.
+3. **Analytical View Query**: Executes `SELECT * FROM vw_campaign_leaderboard LIMIT 5` to confirm PostgreSQL view compilation and query performance.
+
+---
+
+### Continuous Integration (CI) via GitHub Actions
+A GitHub Actions workflow is included at [`.github/workflows/ci.yml`](.github/workflows/ci.yml). On every `push` and `pull_request` to `main`:
+1. Matrix builds across **Python 3.11** and **Python 3.12**.
+2. Compiles and syntax-checks all source, DAG, and test files.
+3. Runs the automated `pytest` test suite (including schema validation, KPI formulas, domain anomaly handling, and in-memory referential integrity checks).
 
 ---
 
