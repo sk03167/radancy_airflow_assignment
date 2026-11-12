@@ -81,6 +81,89 @@ python -c "import sqlite3, pandas as pd; conn = sqlite3.connect('data/warehouse.
 
 ---
 
+## 🎯 Output Objects & How to View Them
+
+The pipeline produces structured relational tables, analytical views, and audit logs loaded into the target warehouse (**PostgreSQL** in Docker or **SQLite** locally):
+
+### 1. Catalog of Output Warehouse Objects
+
+| Output Object | Type | Rows | Description |
+|---|:---:|:---:|---|
+| **`fact_ad_performance_daily`** | **Fact Table** | 12,497 | Granular daily ad performance containing core metrics (`impressions`, `clicks`, `spend`, `conversions`, `assists`), targeting context (`device_type`, `os`, `network`, `match_type`), and pre-calculated KPIs (`ctr`, `cpc`, `cpa`, `conversion_rate`). |
+| **`dim_account`** | **Dimension** | 9 | Advertiser client metadata, customer IDs, status, and currency codes. |
+| **`dim_campaign`** | **Dimension** | 54 | Campaign entities linked to accounts via deterministic surrogate keys. |
+| **`dim_ad_group`** | **Dimension** | 234 | Ad group hierarchy with cleaned numeric identifiers. |
+| **`dim_ad`** | **Dimension** | 484 | Creative ad copies, titles, distribution formats, and destination URLs. |
+| **`dim_date`** | **Dimension** | 7 | Calendar attributes (`full_date`, `day`, `month`, `quarter`, `year`, `day_name`, `is_weekend`). |
+| **`audit_pipeline_runs`** | **Audit Table** | 1+ | Observability log recording run durations, valid/rejected counts, anomaly counts, warnings, and reconciliation totals. |
+| **`vw_campaign_leaderboard`** | **BI View** | — | Top campaigns ranked by spend, impressions, clicks, CTR, and CPA. |
+| **`vw_ad_performance_summary`**| **BI View** | — | Multi-dimensional slice by date, account, campaign, device, and network for automated AI Insights Agents. |
+
+---
+
+### 2. How to View Output Objects in PostgreSQL (Docker)
+
+Run these queries directly in your terminal to inspect the warehouse:
+
+```bash
+# 1. View Campaign Leaderboard (BI View)
+docker compose exec postgres psql -U airflow -d airflow -c "SELECT campaign_name, account_name, spend, impressions, clicks, ctr FROM vw_campaign_leaderboard LIMIT 5;"
+
+# 2. View Fact Table with Pre-calculated KPIs
+docker compose exec postgres psql -U airflow -d airflow -c "SELECT performance_id, date_id, clicks, spend, ctr, cpc, conversion_rate FROM fact_ad_performance_daily WHERE clicks > 0 LIMIT 5;"
+
+# 3. View Pipeline Audit & Data Quality Run Stats
+docker compose exec postgres psql -U airflow -d airflow -c "SELECT run_id, status, total_records, valid_records, anomalies_detected, metrics_summary FROM audit_pipeline_runs;"
+
+# 4. View Dimension Tables (e.g. Accounts & Campaigns)
+docker compose exec postgres psql -U airflow -d airflow -c "SELECT account_id, account_name, account_status, currency_code FROM dim_account;"
+
+# 5. Open Interactive SQL Shell
+docker compose exec -it postgres psql -U airflow -d airflow
+# (Type '\dt' to list tables, '\dv' to list views, '\q' to exit)
+```
+
+#### Connecting via Desktop GUI (DBeaver, pgAdmin, DataGrip, VS Code SQLTools):
+- **Host**: `localhost`
+- **Port**: `5432`
+- **Database**: `airflow`
+- **Username**: `airflow`
+- **Password**: `airflow`
+
+---
+
+### 3. How to View Output Objects in SQLite (Local Runner)
+
+When running outside Docker (`python src/run_pipeline.py`), tables are loaded into `data/warehouse.db`:
+
+#### Option A: Quick Python one-liners
+```bash
+# View Campaign Leaderboard View
+python -c "import sqlite3, pandas as pd; conn = sqlite3.connect('data/warehouse.db'); print(pd.read_sql('SELECT * FROM vw_campaign_leaderboard LIMIT 5', conn).to_string(index=False))"
+
+# View Audit Log Record
+python -c "import sqlite3, pandas as pd; conn = sqlite3.connect('data/warehouse.db'); print(pd.read_sql('SELECT run_id, status, total_records, anomalies_detected, execution_duration_sec FROM audit_pipeline_runs', conn).to_string(index=False))"
+```
+
+#### Option B: VS Code GUI Extension
+1. Install the **SQLite Viewer** extension in VS Code.
+2. Click on `data/warehouse.db` in the VS Code file explorer to interactively sort, filter, and inspect all tables and views visually.
+
+---
+
+### 4. How to View Output Stats in the Airflow UI
+
+1. Open **[http://localhost:8080](http://localhost:8080)** (login: `airflow` / `airflow`).
+2. Click on **`bing_advertising_performance_pipeline`**.
+3. **Graph / Grid View**: View real-time green checkmarks for all 5 operational tasks.
+4. **XCom Tab** (`Admin` $\to$ `XComs`):
+   - View `raw_row_count` (`12497`)
+   - View `valid_count` (`12497`)
+   - View `validation_stats` (JSON dictionary with anomaly flags and financial metric summaries)
+5. **Task Logs**: Click on `verify_warehouse_and_views` $\to$ **Log** to see the formatted leaderboard printed during verification.
+
+---
+
 ## 🏗️ Architecture & Pipeline Flow
 
 The pipeline follows a modular **Extract-Validate-Transform-Load (E-V-T-L)** architecture:
