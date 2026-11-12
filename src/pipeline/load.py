@@ -10,8 +10,11 @@ from sqlalchemy.engine import Engine
 import pandas as pd
 
 from src.db.connection import get_engine, init_db
+from src.db.models import Base
 from src.pipeline.transform import TransformedData
 from src.pipeline.validate import ValidationReport
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 logger = logging.getLogger(__name__)
 
@@ -23,10 +26,10 @@ def load_dataframe_idempotent(
     conflict_columns: list[str],
 ) -> int:
     """
-    Idempotently loads a DataFrame into a target SQL table.
+    Idempotently loads a DataFrame into a target SQL table using native SQLAlchemy dialect inserts.
     - For PostgreSQL: Uses ON CONFLICT DO NOTHING.
     - For SQLite: Uses INSERT OR IGNORE.
-    - Fallback: Filters out existing records via anti-join.
+    - Eliminates intermediate temp tables and avoids pandas/sqlalchemy connection cursor mismatches.
     """
     if df.empty:
         logger.info("Table %s: DataFrame is empty, nothing to load.", table_name)
@@ -35,52 +38,32 @@ def load_dataframe_idempotent(
     dialect = engine.dialect.name
     logger.info("Loading %d rows into %s (dialect=%s)", len(df), table_name, dialect)
 
+    table = Base.metadata.tables.get(table_name)
+    records = df.to_dict(orient="records")
+
     with engine.begin() as conn:
-        if dialect == "sqlite":
-            # For SQLite, stage to temp table and insert or ignore
-            temp_table = f"_tmp_{table_name}"
-            df.to_sql(temp_table, conn, if_exists="replace", index=False)
-            cols = ", ".join([f'"{col}"' for col in df.columns])
-            insert_query = f"""
-                INSERT OR IGNORE INTO {table_name} ({cols})
-                SELECT {cols} FROM {temp_table};
-            """
-            conn.execute(text(insert_query))
-            conn.execute(text(f"DROP TABLE IF EXISTS {temp_table};"))
+        if dialect == "sqlite" and table is not None:
+            # Batch in chunks of 500 to stay well under SQLite parameter limits
+            batch_size = 500
+            for i in range(0, len(records), batch_size):
+                batch = records[i : i + batch_size]
+                stmt = sqlite_insert(table).values(batch).prefix_with("OR IGNORE")
+                conn.execute(stmt)
             return len(df)
 
-        elif dialect == "postgresql":
-            # For PostgreSQL, stage to temporary unlogged table and upsert with ON CONFLICT DO NOTHING
-            temp_table = f"_tmp_{table_name}"
-            df.to_sql(temp_table, conn, if_exists="replace", index=False)
-            cols = ", ".join([f'"{col}"' for col in df.columns])
-            conflict_target = ", ".join([f'"{col}"' for col in conflict_columns])
-            upsert_query = f"""
-                INSERT INTO {table_name} ({cols})
-                SELECT {cols} FROM {temp_table}
-                ON CONFLICT ({conflict_target}) DO NOTHING;
-            """
-            conn.execute(text(upsert_query))
-            conn.execute(text(f"DROP TABLE IF EXISTS {temp_table};"))
+        elif dialect == "postgresql" and table is not None:
+            # Batch in chunks of 2000 for efficient Postgres bulk execution
+            batch_size = 2000
+            for i in range(0, len(records), batch_size):
+                batch = records[i : i + batch_size]
+                stmt = pg_insert(table).values(batch).on_conflict_do_nothing(index_elements=conflict_columns)
+                conn.execute(stmt)
             return len(df)
 
         else:
-            # Generic fallback: filter by primary conflict columns
-            try:
-                existing_keys = pd.read_sql(
-                    f"SELECT {', '.join(conflict_columns)} FROM {table_name}", conn
-                )
-                if not existing_keys.empty:
-                    merged = df.merge(existing_keys, on=conflict_columns, how="left", indicator=True)
-                    new_records = merged[merged["_merge"] == "left_only"].drop(columns=["_merge"])
-                else:
-                    new_records = df
-                if not new_records.empty:
-                    new_records.to_sql(table_name, conn, if_exists="append", index=False)
-                return len(new_records)
-            except Exception:
-                df.to_sql(table_name, conn, if_exists="append", index=False)
-                return len(df)
+            # Fallback for generic SQL engines
+            df.to_sql(table_name, con=engine, if_exists="append", index=False)
+            return len(df)
 
 
 def create_analytics_views(engine: Engine) -> None:
