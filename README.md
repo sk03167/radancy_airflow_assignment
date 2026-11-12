@@ -358,7 +358,7 @@ As the final task in the Airflow DAG ([`verify_warehouse_and_views`](dags/bing_a
 
 ### Continuous Integration (CI) via GitHub Actions
 A GitHub Actions workflow is included at [`.github/workflows/ci.yml`](.github/workflows/ci.yml). On every `push` and `pull_request` to `main`:
-1. Matrix builds across **Python 3.11** and **Python 3.12**.
+1. Executes on **Python 3.12** (matching both local and Airflow container runtimes).
 2. Compiles and syntax-checks all source, DAG, and test files.
 3. Runs the automated `pytest` test suite (including schema validation, KPI formulas, domain anomaly handling, and in-memory referential integrity checks).
 
