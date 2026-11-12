@@ -1,4 +1,6 @@
-# Radancy Senior Data Engineer Challenge: Advertising Performance ETL Pipeline
+# Advertising Performance ETL Pipeline & Data Warehouse
+
+Author: **sk03167**
 
 Production-grade, idempotent ETL pipeline orchestrating advertising performance data (`BING_MultiDays.csv`) into a Star Schema Data Warehouse using **Apache Airflow**, **Python**, **SQLAlchemy**, and **PostgreSQL**.
 
@@ -96,7 +98,7 @@ The warehouse schema is designed around a **Star Schema** optimized for high-per
 ## 🛠️ Project Structure
 
 ```text
-radancy_airflow_assignment/
+advertising_airflow_pipeline/
 ├── dags/
 │   └── bing_ads_etl_dag.py        # Airflow DAG definition & task orchestration
 ├── src/

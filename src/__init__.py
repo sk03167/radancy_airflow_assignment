@@ -1,1 +1,1 @@
-"""Radancy Advertising Performance ETL Pipeline"""
+"""Advertising Performance ETL Pipeline"""

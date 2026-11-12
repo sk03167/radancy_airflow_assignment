@@ -26,7 +26,7 @@ from sqlalchemy import text
 logger = logging.getLogger("airflow.task")
 
 default_args = {
-    "owner": "radancy-data-engineering",
+    "owner": "sk03167",
     "depends_on_past": False,
     "email_on_failure": False,
     "email_on_retry": False,
@@ -129,7 +129,7 @@ with DAG(
     schedule_interval="@daily",
     start_date=datetime(2026, 1, 1),
     catchup=False,
-    tags=["radancy", "etl", "advertising", "warehouse"],
+    tags=["etl", "advertising", "warehouse"],
 ) as dag:
 
     extract_stage = PythonOperator(
