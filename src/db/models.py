@@ -204,3 +204,25 @@ class FactAdPerformanceDaily(Base):
         Index("idx_fact_date_campaign", "date_id", "campaign_id"),
         Index("idx_fact_account_date", "account_id", "date_id"),
     )
+
+
+class AuditPipelineRun(Base):
+    """
+    Audit table capturing execution metrics, data quality validation stats,
+    and domain anomaly counts for each pipeline run.
+    Optimized for automated Insights Agents and data observability.
+    """
+    __tablename__ = "audit_pipeline_runs"
+
+    run_id = Column(String(100), primary_key=True)
+    pipeline_name = Column(String(100), nullable=False, default="bing_advertising_performance")
+    status = Column(String(50), nullable=False)  # SUCCESS, WARNING, FAILED
+    total_records = Column(Integer, nullable=False, default=0)
+    valid_records = Column(Integer, nullable=False, default=0)
+    rejected_records = Column(Integer, nullable=False, default=0)
+    anomalies_detected = Column(Integer, nullable=False, default=0)
+    warnings = Column(Text, nullable=True)
+    errors = Column(Text, nullable=True)
+    metrics_summary = Column(Text, nullable=True)
+    execution_duration_sec = Column(Float, nullable=True)
+    executed_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))

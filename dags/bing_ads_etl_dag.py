@@ -16,9 +16,9 @@ from airflow.operators.python import PythonOperator
 
 from src.config import DATABASE_URL, INPUT_CSV_PATH, STAGING_DIR
 from src.pipeline.extract import extract_raw_csv, stage_raw_data, load_staged_data
-from src.pipeline.validate import validate_raw_dataframe
+from src.pipeline.validate import validate_raw_dataframe, ValidationReport
 from src.pipeline.transform import transform_all
-from src.pipeline.load import load_warehouse
+from src.pipeline.load import load_warehouse, record_pipeline_audit
 from src.db.connection import get_engine
 import pandas as pd
 from sqlalchemy import text
@@ -62,6 +62,15 @@ def task_validate_quality(**context):
     # Re-stage sanitized dataset for transformations
     stage_raw_data(valid_df, "validated_data.parquet")
     context["ti"].xcom_push(key="valid_count", value=report.valid_records)
+    context["ti"].xcom_push(key="validation_stats", value={
+        "total_records": report.total_records,
+        "valid_records": report.valid_records,
+        "rejected_records": report.rejected_records,
+        "anomalies_detected": report.anomalies_detected,
+        "warnings": report.warnings,
+        "errors": report.errors,
+        "metrics_summary": report.metrics_summary,
+    })
 
 
 def task_transform(**context):
@@ -120,6 +129,26 @@ def task_verify_warehouse(**context):
             conn,
         )
         logger.info("Top 5 Campaigns by Spend:\n%s", leaderboard.to_string(index=False))
+
+    # Record Audit Run in Data Warehouse
+    stats = context["ti"].xcom_pull(task_ids="validate_data_quality", key="validation_stats") or {}
+    audit_report = ValidationReport(
+        total_records=stats.get("total_records", fact_count),
+        valid_records=stats.get("valid_records", fact_count),
+        rejected_records=stats.get("rejected_records", 0),
+        anomalies_detected=stats.get("anomalies_detected", 0),
+        warnings=stats.get("warnings", []),
+        errors=stats.get("errors", []),
+        metrics_summary=stats.get("metrics_summary", {}),
+    )
+    dag_run_id = context.get("run_id", f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    record_pipeline_audit(
+        engine=engine,
+        run_id=dag_run_id,
+        pipeline_name="bing_advertising_performance",
+        report=audit_report,
+        status="WARNING" if audit_report.warnings else "SUCCESS",
+    )
 
 
 with DAG(

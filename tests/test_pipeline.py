@@ -14,7 +14,7 @@ from src.pipeline.transform import (
     generate_surrogate_key,
     transform_all,
 )
-from src.pipeline.load import load_warehouse
+from src.pipeline.load import load_warehouse, record_pipeline_audit
 
 
 def test_clean_id():
@@ -189,3 +189,35 @@ def test_referential_integrity_and_idempotency():
     with engine.connect() as conn:
         total_fact_rows = conn.execute(text("SELECT COUNT(*) FROM fact_ad_performance_daily;")).scalar()
         assert total_fact_rows == 12497, "Fact table should have exactly 12497 rows after idempotent reload."
+
+
+def test_audit_pipeline_runs_logging():
+    """Verifies that pipeline execution statistics and data quality metrics are persisted to audit table."""
+    engine = create_engine("sqlite:///:memory:")
+    report = ValidationReport(
+        total_records=100,
+        valid_records=95,
+        rejected_records=5,
+        anomalies_detected=2,
+        warnings=["Test warning"],
+        errors=[],
+        metrics_summary={"total_spend": 250.0},
+    )
+    record_pipeline_audit(
+        engine=engine,
+        run_id="test_run_001",
+        pipeline_name="bing_advertising_performance",
+        report=report,
+        duration_sec=0.45,
+        status="WARNING",
+    )
+
+    with engine.connect() as conn:
+        row = conn.execute(text("SELECT * FROM audit_pipeline_runs WHERE run_id = 'test_run_001';")).mappings().one()
+        assert row["status"] == "WARNING"
+        assert row["total_records"] == 100
+        assert row["valid_records"] == 95
+        assert row["rejected_records"] == 5
+        assert row["anomalies_detected"] == 2
+        assert "Test warning" in row["warnings"]
+        assert row["execution_duration_sec"] == 0.45

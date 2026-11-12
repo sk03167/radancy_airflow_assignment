@@ -23,7 +23,7 @@ from src.db.connection import get_engine
 from src.pipeline.extract import extract_raw_csv, stage_raw_data
 from src.pipeline.validate import validate_raw_dataframe
 from src.pipeline.transform import transform_all
-from src.pipeline.load import load_warehouse
+from src.pipeline.load import load_warehouse, record_pipeline_audit
 
 logging.basicConfig(
     level=logging.INFO,
@@ -82,6 +82,18 @@ def run_pipeline(db_url: str | None = None, input_csv: str | None = None):
             logger.warning("Could not query view: %s", e)
 
     elapsed = round(time.time() - start_time, 2)
+
+    # 6. Audit & Data Quality Logging
+    run_id = f"local_run_{int(start_time)}"
+    record_pipeline_audit(
+        engine=engine,
+        run_id=run_id,
+        pipeline_name="bing_advertising_performance",
+        report=report,
+        duration_sec=elapsed,
+        status="WARNING" if report.warnings else "SUCCESS",
+    )
+
     logger.info("=" * 60)
     logger.info("PIPELINE COMPLETED SUCCESSFULLY IN %.2f SECONDS", elapsed)
     logger.info("Loaded Entities: %s", counts)

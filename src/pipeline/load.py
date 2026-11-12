@@ -3,6 +3,7 @@ Warehouse Loading Module
 Handles idempotent loading of dimensional models and fact tables into the target data warehouse.
 Supports PostgreSQL (production/Airflow) and SQLite/DuckDB (lightweight local execution & testing).
 """
+import json
 import logging
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -10,6 +11,7 @@ import pandas as pd
 
 from src.db.connection import get_engine, init_db
 from src.pipeline.transform import TransformedData
+from src.pipeline.validate import ValidationReport
 
 logger = logging.getLogger(__name__)
 
@@ -202,3 +204,40 @@ def load_warehouse(data: TransformedData, engine: Engine | None = None) -> dict[
 
     logger.info("Warehouse load complete. Loaded records: %s", counts)
     return counts
+
+
+def record_pipeline_audit(
+    engine: Engine,
+    run_id: str,
+    pipeline_name: str,
+    report: ValidationReport,
+    duration_sec: float = 0.0,
+    status: str = "SUCCESS",
+) -> None:
+    """
+    Persists data quality validation results and execution statistics into audit_pipeline_runs table.
+    Enables historical observability and automated monitoring for Insights Agents.
+    """
+    init_db(engine)
+    audit_record = {
+        "run_id": str(run_id),
+        "pipeline_name": str(pipeline_name),
+        "status": str(status),
+        "total_records": int(report.total_records),
+        "valid_records": int(report.valid_records),
+        "rejected_records": int(report.rejected_records),
+        "anomalies_detected": int(report.anomalies_detected),
+        "warnings": json.dumps(report.warnings) if report.warnings else None,
+        "errors": json.dumps(report.errors) if report.errors else None,
+        "metrics_summary": json.dumps(report.metrics_summary) if report.metrics_summary else None,
+        "execution_duration_sec": float(round(duration_sec, 2)),
+        "executed_at": pd.Timestamp.now(tz="UTC"),
+    }
+    audit_df = pd.DataFrame([audit_record])
+    load_dataframe_idempotent(
+        audit_df,
+        table_name="audit_pipeline_runs",
+        engine=engine,
+        conflict_columns=["run_id"],
+    )
+    logger.info("Successfully recorded pipeline audit stats for run '%s' (status=%s)", run_id, status)
